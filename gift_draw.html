@@ -1,0 +1,358 @@
+
+<!--
+
+PURPOSE:
+  Web page for performing a gift draw (random assignment of givers to recipients).
+  Presents participant list, performs the draw, and displays or exports results.
+
+CONTENTS SUMMARY:
+  - Head section: metadata, linked CSS and JS resources, and any third-party libraries.
+  - Body section: participant management UI (add/remove/edit), draw controls (run, reset),
+    result display area, and optional export/download controls.
+  - Client-side logic: input validation, randomization algorithm, UI state updates,
+    and optional AJAX calls to server endpoints.
+
+USAGE:
+  - Ensure linked assets (stylesheets, scripts) are present and paths are correct.
+  - Provide a participant list before running the draw. Confirm constraints (e.g. no self-assignments).
+  - If using server-side APIs, configure endpoints (e.g. /api/participants, /api/draw).
+
+NOTES & RECOMMENDATIONS:
+  - Keep sensitive data (real names, addresses) secure; avoid logging draw results to client-side storage if privacy is required.
+  - For deterministic testing, support a seeded random generator option.
+  - Add accessibility attributes to interactive elements and ensure keyboard operability.
+  - Include unit/integration tests for the draw algorithm to verify fairness and constraint handling.
+  - Document any required server configuration or environment variables in the project README.
+-->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gift draw</title>
+<style>
+
+html, body {
+  height: 100%;      /* ensure body fills full screen */
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Segoe UI', sans-serif;
+  text-align: center;
+  background: #2C8B53;
+  margin: 0;
+  padding: 20px;
+  color: #fff;
+}
+
+button {
+  margin: 10px;
+  padding: 12px 24px;
+  font-size: 18px;
+  border-radius: 12px;
+  border: none;
+  background: #e67e22;
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 4px #c0392b;
+  transition: transform 0.1s;
+}
+button:hover:not(:disabled) { background: #d35400; }
+button:active { transform: translateY(2px); box-shadow: 0 2px #c0392b; }
+button:disabled { background: #aaa; cursor: not-allowed; }
+
+#slotContainer {
+  margin: 40px auto;
+  width: 700px;
+  display: flex;
+  justify-content: space-around;
+}
+
+.reel {
+  width: 200px;
+  height: 80px;
+  overflow: hidden;
+  border: 6px solid #f39c12;
+  border-radius: 20px;
+  background: linear-gradient(#444, #111);
+  box-shadow: 0 0 20px rgba(0,0,0,0.7), inset 0 0 10px #fff3;
+  position: relative;
+}
+
+.slotWindow {
+  position: relative;
+  height: 80px;
+  overflow: hidden;
+}
+
+.slotList {
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.slotItem {
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: bold;
+  color: #fff;
+  text-shadow: 2px 2px 5px black;
+}
+
+.slotHighlight {
+  position: absolute;
+  top: 0;
+  width: 100%;
+  height: 80px;
+  border-top: 3px solid gold;
+  border-bottom: 3px solid gold;
+  box-shadow: 0 0 10px gold inset;
+  pointer-events: none;
+}
+
+#giverName { font-size: 28px; font-weight: bold; margin-top: 20px; text-shadow: 1px 1px 4px black; }
+#result { font-size: 28px; margin-top: 15px; font-weight: bold; text-shadow: 1px 1px 4px black; }
+#history { margin-top: 50px; }
+#history button {
+  font-size: 16px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  margin: 3px;
+}
+
+#confettiCanvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+</style>
+
+</head>
+<body>
+
+<h1>🎁 🎁 🎁 🎁 🎁 🎁</h1>
+
+<div id="slotContainer">
+  <div class="reel"><div class="slotWindow"><div class="slotList" id="reel1"></div><div class="slotHighlight"></div></div></div>
+  <div class="reel"><div class="slotWindow"><div class="slotList" id="reel2"></div><div class="slotHighlight"></div></div></div>
+  <div class="reel"><div class="slotWindow"><div class="slotList" id="reel3"></div><div class="slotHighlight"></div></div></div>
+</div>
+
+<button id="nextButton" onclick="nextGiver()" disabled>Next Turn</button>
+<button id="spinButton" onclick="spinSlot()" disabled>Spin</button>
+<!-- <button onclick="hideAll()">Hide</button> -->
+
+<div id="giverName"></div>
+<div id="result"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/seedrandom/3.0.5/seedrandom.min.js"></script>
+
+<audio id="spinSound" src="https://actions.google.com/sounds/v1/alarms/clock_tick.ogg"></audio>
+<audio id="winSound" src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg"></audio>
+
+<br><br><br>
+<h2>🎁 Drawing History</h2>
+<div id="history"></div>
+
+<canvas id="confettiCanvas"></canvas>
+
+<script>
+let data, pairs = {}, order = [], currentIndex = 0, currentReceiver = "", spinning = false;
+const reels = [document.getElementById('reel1'), document.getElementById('reel2'), document.getElementById('reel3')];
+const spinSound = document.getElementById('spinSound');
+const winSound = document.getElementById('winSound');
+const slotHeight = 80;
+
+// Seeding is applied after loading `people.json` so a `seed` field can control randomness.
+
+const confettiCanvas = document.getElementById('confettiCanvas');
+const ctx = confettiCanvas.getContext('2d');
+confettiCanvas.width = window.innerWidth;
+confettiCanvas.height = window.innerHeight;
+
+let confettiParticles = [];
+
+async function loadData() {
+  const response = await fetch('people.json');
+  data = await response.json();
+  // seed handling: if people.json defines a top-level `seed` field use it, otherwise use current year
+  const fileSeed = (data && data.seed !== undefined) ? data.seed : new Date().getFullYear();
+  try { Math.seedrandom(fileSeed); } catch (e) { /* seedrandom may not be available in extreme cases */ }
+
+  generatePairs(data.people, data.exclusions);
+  order = shuffle([...data.people]);
+  currentIndex = 0;
+  document.getElementById('nextButton').disabled = false;
+  document.getElementById('spinButton').disabled = true;
+  reels.forEach(r => r.innerHTML = '');
+}
+
+function generatePairs(people, exclusions) {
+  const maxAttempts = 1000;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let receivers = [...people]; shuffle(receivers);
+    let valid = true; let result = {};
+    for (let i=0;i<people.length;i++){
+      const g=people[i], r=receivers[i];
+      if(g===r || (exclusions[g]||[]).includes(r)){ valid=false; break; }
+      result[g]=r;
+    }
+    if(valid){ pairs=result; return; }
+  }
+  alert("Could not find a valid draw with the given exclusions.");
+}
+
+function shuffle(array){ for(let i=array.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [array[i],array[j]]=[array[j],array[i]]; } return array; }
+
+function nextGiver() {
+  if(currentIndex>=order.length){
+    document.getElementById('giverName').innerText='All names drawn!';
+    document.getElementById('nextButton').disabled=true;
+    document.getElementById('spinButton').disabled=true;
+
+    saveSelections();
+
+    return;
+  }
+  const giver=order[currentIndex];
+  currentReceiver=pairs[giver];
+  currentIndex++;
+  document.getElementById('giverName').innerText=`${giver}, take your spin!`;
+  document.getElementById('result').innerText='';
+  document.getElementById('spinButton').disabled=false;
+  populateReels([...data.people]);
+  addToHistory(giver);
+}
+
+function populateReels(names){
+  reels.forEach(r=>{
+    r.innerHTML=''; 
+    const repeated=[];
+    for(let i=0;i<10;i++) repeated.push(...names);
+    repeated.forEach(name=>{
+      const div=document.createElement('div');
+      div.className='slotItem';
+      div.textContent=name;
+      r.appendChild(div);
+    });
+    r.style.top='0px';
+  });
+}
+
+function spinSlot() {
+  if(spinning) return;
+  spinning=true;
+  spinSound.currentTime=0; spinSound.play();
+  const itemsPerReel=reels.map(r=>Array.from(r.children));
+  const targetIndex=itemsPerReel[0].findIndex(el=>el.textContent===currentReceiver);
+  let speed=[30,33,36]; const deceleration=[0.15, 0.13, 0.12]; let offset=[0,0,0];
+
+  function animate() {
+    let allStopped=true;
+    reels.forEach((reel,idx)=>{
+      if(speed[idx]>0){
+        offset[idx]+=speed[idx];
+        if(offset[idx]>=itemsPerReel[idx].length*slotHeight) offset[idx]-=itemsPerReel[idx].length*slotHeight;
+        reel.style.top=-offset[idx]+'px';
+        speed[idx]-=deceleration[idx];
+        if(speed[idx]<0) speed[idx]=0;
+        allStopped=false;
+      } else {
+        reel.style.top=-targetIndex*slotHeight+'px';
+      }
+    });
+    drawConfetti();
+    if(!allStopped) requestAnimationFrame(animate);
+    else {
+      document.getElementById('result').innerText=`🎉 You got: ${currentReceiver}!`;
+      flashWinner();
+      spinSound.pause(); winSound.currentTime=0; winSound.play();
+      document.getElementById('spinButton').disabled=true;
+      spinning=false;
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+function saveSelections(){
+  // include seed (if provided in people.json) and timestamp for reproducibility
+  const out = {
+    seed: (data && data.seed !== undefined) ? data.seed : null,
+    generatedAt: new Date().toISOString(),
+    selections: pairs
+  };
+  const dataStr=JSON.stringify(out,null,2);
+  const blob=new Blob([dataStr],{type:"application/json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download="selections.json"; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function hideAll(){
+  document.getElementById('giverName').innerText='';
+  document.getElementById('result').innerText='';
+  reels.forEach(r=>r.innerHTML='');
+}
+
+function addToHistory(giver){
+  const historyDiv=document.getElementById('history');
+  const btn=document.createElement('button');
+  btn.textContent=giver;
+  btn.onclick=()=>{ alert(`${giver} selected: ${pairs[giver]}`); };
+  historyDiv.appendChild(btn);
+}
+
+// Flash winner text
+function flashWinner(){
+  const resultEl=document.getElementById('result');
+  let count=0;
+  const colors=['#f1c40f','#e74c3c','#2ecc71','#3498db','#9b59b6','#1abc9c'];
+  const interval=setInterval(()=>{
+    resultEl.style.color=colors[count%colors.length];
+    count++; if(count>11) clearInterval(interval);
+  },100);
+}
+
+// Confetti
+function drawConfetti(){
+  if(confettiParticles.length<150){
+    for(let i=0;i<5;i++){
+      confettiParticles.push({
+        x:Math.random()*window.innerWidth,
+        y:Math.random()*window.innerHeight-100,
+        r:Math.random()*6+2,
+        d:Math.random()*10+1,
+        color:`hsl(${Math.random()*360},100%,50%)`,
+        tilt:Math.random()*10-10
+      });
+    }
+  }
+  ctx.clearRect(0,0,window.innerWidth,window.innerHeight);
+  confettiParticles.forEach((p,i)=>{
+    ctx.beginPath();
+    ctx.moveTo(p.x+ p.tilt, p.y);
+    ctx.lineTo(p.x+ p.tilt+ p.r/2, p.y+ p.r);
+    ctx.strokeStyle=p.color;
+    ctx.lineWidth=p.r/2;
+    ctx.stroke();
+    p.y+=p.d; p.tilt+=0.1;
+    if(p.y>window.innerHeight){ confettiParticles.splice(i,1); }
+  });
+}
+
+window.onload=loadData;
+window.onresize=()=>{ confettiCanvas.width=window.innerWidth; confettiCanvas.height=window.innerHeight; };
+</script>
+</body>
+</html>

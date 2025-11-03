@@ -1,0 +1,13 @@
+{
+  "people": ["Aisha", "David", "Mei", "Kwame", "Priya", "Liam", "Nia", "Omar"],
+  "exclusions": {
+    "Aisha": ["David", "Mei"],
+    "David": ["Mei"],
+    "Mei": [],
+    "Kwame": ["Omar"],
+    "Priya": ["Liam"],
+    "Liam": [],
+    "Nia": ["Aisha"],
+    "Omar": ["Priya", "Liam", "Nia"]
+  }
+}
