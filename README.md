@@ -3,6 +3,12 @@
 
 A small single-file web app for running a Secret-Santa gift-draw with exclusions. The repo contains a fun slot-machine-style UI that reveals who each person is assigned to give a gift to. It supports specifying people and exclusion rules in `people.json`. The final selections are saved to a json file.
 
+## Why is this one so great??
+
+It can be run locally (or wherever you want) and requires no registration or email addresses. The information is just for you and your people.
+
+Theoretically you could game the seed to get your preferred person, but that would take all the fun out of it. Don't do that.
+
 ## 🎁 How it works
 
 - On load the app reads `people.json`. Keep the files together!
